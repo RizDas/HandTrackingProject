@@ -54,7 +54,7 @@ class ASLRecognizer:
         self._active_phases : List[int] = []
         self.active_letters : List[str] = []
 
-        for phase in (active_phases or [1]):
+        for phase in (active_phases or [1, 2]):
             self.add_phase(phase)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -282,6 +282,11 @@ class ASLRecognizer:
         # ── Base ───────────────────────────────────────────────────────────
         score = 0.45
 
+        # ── Penalty: if fingers are significantly curled, it's likely C, not B
+        avg_curl_4 = sum(fc[1:5]) / 4.0
+        if avg_curl_4 > 0.25:
+            score -= 0.25
+
         # ── Bonus: four fingers well extended ─────────────────────────────
         avg_ext = sum(1.0 - fc[i] for i in [1, 2, 3, 4]) / 4.0
         score += avg_ext * 0.20
@@ -342,28 +347,355 @@ class ASLRecognizer:
 
     # ═════════════════════════════════════════════════════════════════════════
     # PHASE 2 — One Extra Feature Required
-    # (Implemented in the next iteration)
     # ═════════════════════════════════════════════════════════════════════════
 
-    # Stubs so add_phase(2) does not crash; returns 0 until implemented.
-    def _check_1(self, f: ASLFeatures) -> float: return 0.0
-    def _check_W(self, f: ASLFeatures) -> float: return 0.0
-    def _check_U(self, f: ASLFeatures) -> float: return 0.0
-    def _check_V(self, f: ASLFeatures) -> float: return 0.0
-    def _check_A(self, f: ASLFeatures) -> float: return 0.0
-    def _check_S(self, f: ASLFeatures) -> float: return 0.0
-    def _check_O(self, f: ASLFeatures) -> float: return 0.0
+    def _check_1(self, f: ASLFeatures) -> float:
+        """1 — Only index finger up, pointing up."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if not fu[1]:  return 0.0
+        if     fu[2]:  return 0.0
+        if     fu[3]:  return 0.0
+        if     fu[4]:  return 0.0
+        if     fu[0]:  return 0.0  # thumb tucked
+
+        score = 0.50
+        score += (fc[2] + fc[3] + fc[4]) / 3.0 * 0.20
+        score += (1.0 - fc[1]) * 0.15
+        
+        # Pointing vertically
+        vert_score = max(0.0, (45.0 - f.index_dir_angle) / 45.0)
+        score += vert_score * 0.15
+        
+        # Penalty: if thumb touches middle/ring, it's a D, not a 1
+        min_thumb_dist = min(f.thumb_middle_dist, f.thumb_ring_dist)
+        if min_thumb_dist < 0.4:
+            score -= 0.25
+        
+        return min(1.0, max(0.0, score))
+
+    def _check_W(self, f: ASLFeatures) -> float:
+        """W — Index, middle, ring up. Pinky and thumb down."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if not fu[1]:  return 0.0
+        if not fu[2]:  return 0.0
+        if not fu[3]:  return 0.0
+        if     fu[4]:  return 0.0
+        if     fu[0]:  return 0.0
+
+        score = 0.50
+        score += sum((1.0 - fc[i]) for i in [1, 2, 3]) / 3.0 * 0.25
+        score += (fc[0] + fc[4]) / 2.0 * 0.10
+        
+        # Spread apart
+        avg_spread = (f.index_middle_spread + f.middle_ring_spread) / 2.0
+        spread_score = min(avg_spread / 0.15, 1.0)
+        score += spread_score * 0.15
+        
+        return min(1.0, score)
+
+    def _check_U(self, f: ASLFeatures) -> float:
+        """U — Index and middle up, HELD CLOSE."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if not fu[1]:  return 0.0
+        if not fu[2]:  return 0.0
+        if     fu[3]:  return 0.0
+        if     fu[4]:  return 0.0
+        if     fu[0]:  return 0.0
+
+        if f.index_middle_dist > 0.25:  # Threshold tuned for real hand spread
+            return 0.0
+
+        score = 0.55
+        score += sum((1.0 - fc[i]) for i in [1, 2]) / 2.0 * 0.15
+        score += sum(fc[i] for i in [0, 3, 4]) / 3.0 * 0.15
+        
+        close_score = max(0.0, (0.25 - f.index_middle_dist) / 0.25)
+        score += close_score * 0.15
+        return min(1.0, score)
+
+    def _check_V(self, f: ASLFeatures) -> float:
+        """V — Index and middle up, SPREAD APART."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if not fu[1]:  return 0.0
+        if not fu[2]:  return 0.0
+        if     fu[3]:  return 0.0
+        if     fu[4]:  return 0.0
+        if     fu[0]:  return 0.0
+
+        if f.index_middle_dist <= 0.25:
+            return 0.0
+
+        score = 0.55
+        score += sum((1.0 - fc[i]) for i in [1, 2]) / 2.0 * 0.15
+        score += sum(fc[i] for i in [0, 3, 4]) / 3.0 * 0.15
+        
+        spread_score = min((f.index_middle_dist - 0.25) / 0.35, 1.0)
+        score += spread_score * 0.20
+        return min(1.0, score)
+
+    def _check_A(self, f: ASLFeatures) -> float:
+        """A — Fist, thumb beside."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if any(fu[1:5]): return 0.0
+
+        if f.thumb_across_palm or f.thumb_above_knuckles:
+            return 0.0
+
+        if f.o_shape_score > 0.4:
+            return 0.0
+
+        score = 0.50
+        score += sum(fc[1:5]) / 4.0 * 0.25
+        score += (1.0 - fc[0]) * 0.15
+        score += 0.10
+        return min(1.0, score)
+
+    def _check_S(self, f: ASLFeatures) -> float:
+        """S — Fist, thumb over knuckles."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if any(fu[1:5]): return 0.0
+
+        if not (f.thumb_across_palm or f.thumb_above_knuckles):
+            return 0.0
+
+        if f.o_shape_score > 0.4:
+            return 0.0
+
+        score = 0.50
+        score += sum(fc[1:5]) / 4.0 * 0.25
+        
+        if f.thumb_above_knuckles:
+            score += 0.15
+        elif f.thumb_across_palm:
+            score += 0.10
+            
+        if fc[0] < 0.2:
+            score -= 0.10
+        else:
+            score += fc[0] * 0.10
+            
+        # S features a horizontal thumb wrap
+        lm = f.lmList
+        dx = abs(lm[4][1] - lm[3][1])
+        dy = abs(lm[4][2] - lm[3][2])
+        if dx > dy:
+            score += 0.15  # strong horizontal wrap
+            
+        # Penalty: if fingertips are resting ON the thumb, it's E, not S
+        avg_tip_dist = sum([f.thumb_index_dist, f.thumb_middle_dist, f.thumb_ring_dist, f.thumb_pinky_dist]) / 4.0
+        if avg_tip_dist < 0.6:
+            score -= 0.25
+            
+        return min(1.0, max(0.0, score))
+
+    def _check_O(self, f: ASLFeatures) -> float:
+        """O — All fingers curve to meet thumb."""
+        fu, fc = f.fingers_up, f.finger_curl
+        
+        if f.o_shape_score < 0.45:
+            return 0.0
+            
+        # O shouldn't have too many fingers straight up
+        if sum(fu) >= 2 and sum(fc) < 1.0:
+            return 0.0
+            
+        score = 0.40
+        o_bonus = min((f.o_shape_score - 0.45) / 0.4, 1.0)
+        score += o_bonus * 0.40
+        
+        avg_curl = sum(fc) / 5.0
+        if 0.4 < avg_curl < 0.9:
+            score += 0.20
+        else:
+            score += 0.10
+            
+        return min(1.0, score)
 
     # ═════════════════════════════════════════════════════════════════════════
-    # PHASE 3 — Two+ Features Required (stubs)
+    # PHASE 3 — Two+ Features Required
     # ═════════════════════════════════════════════════════════════════════════
-    def _check_D(self, f: ASLFeatures) -> float: return 0.0
-    def _check_F(self, f: ASLFeatures) -> float: return 0.0
-    def _check_E(self, f: ASLFeatures) -> float: return 0.0
-    def _check_C(self, f: ASLFeatures) -> float: return 0.0
-    def _check_T(self, f: ASLFeatures) -> float: return 0.0
-    def _check_M(self, f: ASLFeatures) -> float: return 0.0
-    def _check_N(self, f: ASLFeatures) -> float: return 0.0
+
+    def _get_t_n_m_position(self, f: ASLFeatures) -> str:
+        """Returns 'A', 'T', 'N', 'M' based on lateral thumb tip position."""
+        lm = f.lmList
+        tx = lm[4][1]
+        
+        # Sort index, middle, ring, pinky MCPs by X coordinate
+        coords = [
+            (lm[5][1], 'I'),
+            (lm[9][1], 'M'),
+            (lm[13][1], 'R'),
+            (lm[17][1], 'P')
+        ]
+        coords.sort(key=lambda x: x[0])
+        
+        if tx < coords[0][0]: pos = 0
+        elif tx < coords[1][0]: pos = 1
+        elif tx < coords[2][0]: pos = 2
+        elif tx < coords[3][0]: pos = 3
+        else: pos = 4
+        
+        if f.is_right_hand:
+            return {0:'A', 1:'T', 2:'N', 3:'M', 4:'none'}.get(pos, 'none')
+        else:
+            return {4:'A', 3:'T', 2:'N', 1:'M', 0:'none'}.get(pos, 'none')
+
+    def _check_D(self, f: ASLFeatures) -> float:
+        """D — Index UP, others DOWN. Thumb touches middle/ring."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if not fu[1]: return 0.0
+        if any(fu[2:5]): return 0.0
+        
+        # Thumb should touch/be near middle or ring tip
+        min_dist = min(f.thumb_middle_dist, f.thumb_ring_dist)
+        if min_dist > 0.45:
+            return 0.0
+            
+        score = 0.60
+        score += (fc[2] + fc[3] + fc[4]) / 3.0 * 0.20
+        score += (1.0 - fc[1]) * 0.10
+        
+        # Bonus if thumb and middle are very close
+        close_bonus = max(0.0, (0.45 - min_dist) / 0.45)
+        score += close_bonus * 0.10
+        return min(1.0, score)
+
+    def _check_F(self, f: ASLFeatures) -> float:
+        """F — Index DOWN, Middle/Ring/Pinky UP. Thumb touches index."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if fu[1]: return 0.0
+        if not all(fu[2:5]): return 0.0
+        
+        if f.thumb_index_dist > 0.4:
+            return 0.0
+            
+        score = 0.50
+        score += sum((1.0 - fc[i]) for i in [2, 3, 4]) / 3.0 * 0.20
+        score += fc[1] * 0.15
+        
+        close_bonus = max(0.0, (0.4 - f.thumb_index_dist) / 0.4)
+        score += close_bonus * 0.15
+        return min(1.0, score)
+
+    def _check_E(self, f: ASLFeatures) -> float:
+        """E — All fingers curled tightly, thumb folded across BELOW knuckles."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if any(fu[1:5]): return 0.0
+        
+        # S has thumb_above_knuckles = True
+        if f.thumb_above_knuckles:
+            return 0.0
+            
+        # Tips should be somewhat close to thumb
+        avg_tip_dist = sum([f.thumb_index_dist, f.thumb_middle_dist, f.thumb_ring_dist, f.thumb_pinky_dist]) / 4.0
+        if avg_tip_dist > 0.6:
+            return 0.0
+            
+        score = 0.60
+        score += sum(fc[1:5]) / 4.0 * 0.20
+        
+        close_bonus = max(0.0, (0.6 - avg_tip_dist) / 0.6)
+        score += close_bonus * 0.20
+        return min(1.0, score)
+
+    def _check_C(self, f: ASLFeatures) -> float:
+        """C — Hand open, all fingers curved like a C."""
+        fu, fc = f.fingers_up, f.finger_curl
+        
+        # If it's a tight O, it's not C
+        if f.o_shape_score > 0.4:
+            return 0.0
+            
+        # Fingers should be moderately curled
+        avg_curl = sum(fc) / 5.0
+        if avg_curl < 0.20 or avg_curl > 0.80:
+            return 0.0
+            
+        # Thumb and index should be moderately separated (forming the C opening)
+        if f.thumb_index_dist < 0.25:
+            return 0.0
+            
+        # If thumb is touching middle/ring, it's a D, not C
+        if min(f.thumb_middle_dist, f.thumb_ring_dist) < 0.35:
+            return 0.0
+            
+        score = 0.55
+        
+        # Reward intermediate curl (closest to 0.5)
+        curl_quality = 1.0 - (abs(avg_curl - 0.5) / 0.30)
+        score += curl_quality * 0.20
+        
+        # Reward vertical alignment of the C (index above thumb)
+        if f.lmList[8][2] < f.lmList[4][2]:
+            score += 0.15
+            
+        # Base bonus
+        score += 0.15
+        return min(1.0, score)
+
+    def _check_T(self, f: ASLFeatures) -> float:
+        """T — Fist, thumb under index."""
+        if any(f.fingers_up[1:5]): return 0.0
+        
+        pos = self._get_t_n_m_position(f)
+        if pos != 'T':
+            return 0.0
+            
+        # Penalty if thumb is wrapped horizontally across the hand (that's an S)
+        lm = f.lmList
+        dx = abs(lm[4][1] - lm[3][1])
+        dy = abs(lm[4][2] - lm[3][2])
+        if dx > dy * 1.5:
+            return 0.0
+            
+        score = 0.70
+        score += sum(f.finger_curl[1:5]) / 4.0 * 0.30
+        
+        # Bonus if thumb is pointing distinctly UP
+        if dy > dx * 1.5:
+            score += 0.15
+            
+        return min(1.0, score)
+
+    def _check_M(self, f: ASLFeatures) -> float:
+        """M — Fist, thumb under index, middle, ring."""
+        if any(f.fingers_up[1:5]): return 0.0
+        
+        pos = self._get_t_n_m_position(f)
+        if pos != 'M':
+            return 0.0
+            
+        lm = f.lmList
+        dx = abs(lm[4][1] - lm[3][1])
+        dy = abs(lm[4][2] - lm[3][2])
+        if dx > dy * 1.5:
+            return 0.0
+            
+        score = 0.70
+        score += sum(f.finger_curl[1:5]) / 4.0 * 0.30
+        if dy > dx * 1.5:
+            score += 0.15
+        return min(1.0, score)
+
+    def _check_N(self, f: ASLFeatures) -> float:
+        """N — Fist, thumb under index, middle."""
+        if any(f.fingers_up[1:5]): return 0.0
+        
+        pos = self._get_t_n_m_position(f)
+        if pos != 'N':
+            return 0.0
+            
+        lm = f.lmList
+        dx = abs(lm[4][1] - lm[3][1])
+        dy = abs(lm[4][2] - lm[3][2])
+        if dx > dy * 1.5:
+            return 0.0
+            
+        score = 0.70
+        score += sum(f.finger_curl[1:5]) / 4.0 * 0.30
+        if dy > dx * 1.5:
+            score += 0.15
+        return min(1.0, score)
 
     # ═════════════════════════════════════════════════════════════════════════
     # PHASE 4 — Complex / Nuanced (stubs)

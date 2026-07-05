@@ -283,7 +283,7 @@ def draw_controls(img) -> None:
     """Controls hint bar at the bottom."""
     h, w = img.shape[:2]
     overlay_rect(img, 0, h - 30, w, 30, color=C['panel'], alpha=0.80)
-    put_text(img, "N: Next Phase    D: Debug    R: Reset    Q: Quit",
+    put_text(img, "D: Debug    R: Reset    Q: Quit",
              14, h - 10, scale=0.48, color=C['dim'])
 
 
@@ -304,13 +304,11 @@ def main() -> None:
 
     # ── Modules ──────────────────────────────────────────────────────────────
     detector   = handDetector(maxHands=1, detectionCon=0.85, trackCon=0.80)
-    recognizer = ASLRecognizer(active_phases=[1])
+    recognizer = ASLRecognizer(active_phases=[1, 2, 3])
 
     # ── State ────────────────────────────────────────────────────────────────
     history       : List[Optional[str]] = []
     debug_mode    : bool = False
-    current_phase : int  = 1
-    MAX_PHASE     : int  = 5
     pTime         : float = time.time()
 
     # Cached display values (updated each frame)
@@ -324,9 +322,9 @@ def main() -> None:
     cv2.resizeWindow("ASL Sign Language Recognizer", 1280, 720)
 
     print("=" * 60)
-    print("  ASL Sign Language Recognizer  —  Phase 1")
-    print("  Signs active: I  L  Y  B  5")
-    print("  N → next phase  |  D → debug  |  R → reset  |  Q → quit")
+    print("  ASL Sign Language Recognizer  —  Phase 1-3")
+    print(f"  Signs active: {' '.join(recognizer.active_letters)}")
+    print("  D → debug  |  R → reset  |  Q → quit")
     print("=" * 60)
 
     while True:
@@ -403,15 +401,6 @@ def main() -> None:
         if key == ord('q'):
             print("Quitting…")
             break
-
-        elif key == ord('n'):
-            if current_phase < MAX_PHASE:
-                current_phase += 1
-                recognizer.add_phase(current_phase)
-                print(f"Phase {current_phase} added → "
-                      f"active signs: {' '.join(recognizer.active_letters)}")
-            else:
-                print("All phases already active.")
 
         elif key == ord('d'):
             debug_mode = not debug_mode
