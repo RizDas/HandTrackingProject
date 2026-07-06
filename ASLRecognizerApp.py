@@ -48,14 +48,14 @@ except ImportError as e:
 # ─────────────────────────────────────────────────────────────────────────────
 C = {
     'green'      : (72,  209, 100),
-    'gold'       : (40,  190, 235),
-    'blue_muted' : (200, 130,  70),
-    'white'      : (255, 255, 255),
-    'gray'       : (170, 170, 185),
-    'dim'        : ( 90,  90, 105),
-    'panel'      : ( 22,  22,  30),
-    'panel_light': ( 36,  36,  48),
-    'red_muted'  : ( 70,  70, 200),
+    'accent'     : (160, 190, 220),
+    'blue_muted' : (90, 105, 120),
+    'white'      : (245, 245, 245),
+    'gray'       : (155, 145, 125),
+    'dim'        : (100, 90, 75),
+    'panel'      : (55,  45,  35),
+    'panel_light': (90,  75,  60),
+    'red_muted'  : (70,  70, 200),
 }
 
 FONT       = cv2.FONT_HERSHEY_SIMPLEX
@@ -92,7 +92,7 @@ def conf_color(conf: float) -> tuple:
     if conf >= 0.85:
         return C['green']
     elif conf >= 0.72:
-        return C['gold']
+        return C['accent']
     else:
         return C['red_muted']
 
@@ -154,7 +154,7 @@ def draw_letter_panel(img, letter: Optional[str], confidence: float,
         status_x = px + 14
         status_y = py + 22
         cv2.rectangle(img, (status_x - 6, status_y - sh - 4),
-                      (status_x + sw + 8, status_y + 4), (40, 40, 52), -1)
+                      (status_x + sw + 8, status_y + 4), C['panel_light'], -1)
         put_text(img, status_text, status_x, status_y,
                  scale=status_scale, color=C['white'], thickness=1)
 
@@ -181,7 +181,7 @@ def draw_letter_panel(img, letter: Optional[str], confidence: float,
         put_text(img, "HOLD STILL...", px + 14, py + ph // 2 - 4,
                  scale=0.75, color=C['dim'], thickness=2)
         put_text(img, "to detect a sign", px + 16, py + ph // 2 + 28,
-                 scale=0.50, color=(170, 170, 185))
+                 scale=0.50, color=C['gray'])
 
 
 def draw_score_chart(img, scores: Dict[str, float],
@@ -200,7 +200,7 @@ def draw_score_chart(img, scores: Dict[str, float],
                   (55, 55, 70), 1)
 
     put_text(img, "Top Matches", sx + 10, sy + 20,
-             scale=0.48, color=C['dim'])
+             scale=0.48, color=C['accent'])
 
     sorted_items = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:5]
     bar_max_w = 140
@@ -236,11 +236,11 @@ def draw_debug_panel(img, features: Optional[ASLFeatures],
         return
 
     pw, ph = 280, 310
-    overlay_rect(img, dx, dy, pw, ph, color=(16, 16, 22), alpha=0.88)
-    cv2.rectangle(img, (dx, dy), (dx + pw, dy + ph), (60, 60, 80), 1)
+    overlay_rect(img, dx, dy, pw, ph, color=C['panel'], alpha=0.88)
+    cv2.rectangle(img, (dx, dy), (dx + pw, dy + ph), C['panel_light'], 1)
 
     put_text(img, "DEBUG — Feature Values", dx + 8, dy + 20,
-             scale=0.45, color=C['gold'])
+             scale=0.45, color=C['accent'])
 
     f = features
     lines = [
@@ -266,9 +266,10 @@ def draw_debug_panel(img, features: Optional[ASLFeatures],
 def draw_controls(img) -> None:
     """Controls hint bar at the bottom."""
     h, w = img.shape[:2]
-    overlay_rect(img, 0, h - 30, w, 30, color=C['panel'], alpha=0.80)
-    put_text(img, "D: Debug    R: Reset    Q: Quit",
-             14, h - 10, scale=0.48, color=C['dim'])
+    overlay_rect(img, 0, h - 32, w, 32, color=C['panel'], alpha=0.88)
+    cv2.line(img, (12, h - 32), (w - 12, h - 32), C['panel_light'], 1)
+    put_text(img, "D: Debug   |   R: Reset   |   Q: Quit",
+             14, h - 10, scale=0.50, color=C['gray'], thickness=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -328,68 +329,81 @@ def main() -> None:
         # ── Recognition ───────────────────────────────────────────────────
         raw_letter, raw_conf, raw_scores = None, 0.0, {}
         now = time.time()
+
+        if confirmed_letter is not None and now >= cooldown_until:
+            confirmed_letter = None
+            confirmed_conf = 0.0
+            confirmed_scores = {}
+            candidate_letter = None
+            candidate_conf = 0.0
+            candidate_scores = {}
+            candidate_started = 0.0
+            display_letter = None
+            display_conf = 0.0
+            display_scores = {}
+            display_status = "SHOW A SIGN"
+            last_features = None
+
         in_cooldown = now < cooldown_until
 
-        if lmList and not in_cooldown:
-            raw_letter, raw_conf, raw_scores = recognizer.recognize(lmList)
-            # Cache features for debug panel
-            last_features = recognizer.extractor.extract(lmList)
+        if lmList:
+            if not in_cooldown:
+                raw_letter, raw_conf, raw_scores = recognizer.recognize(lmList)
+                # Cache features for debug panel
+                last_features = recognizer.extractor.extract(lmList)
 
-            if raw_letter is not None and raw_conf >= CANDIDATE_CONFIDENCE:
-                if raw_letter == candidate_letter:
-                    candidate_conf = max(candidate_conf, raw_conf)
+                if raw_letter is not None and raw_conf >= CANDIDATE_CONFIDENCE:
+                    if raw_letter == candidate_letter:
+                        candidate_conf = max(candidate_conf, raw_conf)
+                    else:
+                        candidate_letter = raw_letter
+                        candidate_conf = raw_conf
+                        candidate_scores = raw_scores
+                        candidate_started = now
                 else:
-                    candidate_letter = raw_letter
-                    candidate_conf = raw_conf
-                    candidate_scores = raw_scores
-                    candidate_started = now
+                    candidate_letter = None
+                    candidate_conf = 0.0
+                    candidate_scores = {}
+                    candidate_started = 0.0
+
+                if candidate_letter is not None and now - candidate_started >= CANDIDATE_HOLD_SECONDS:
+                    confirmed_letter = candidate_letter
+                    confirmed_conf = candidate_conf
+                    confirmed_scores = candidate_scores
+                    cooldown_until = now + COOLDOWN_SECONDS
+                    display_status = "CONFIRMED"
+                    candidate_letter = None
+                    candidate_conf = 0.0
+                    candidate_scores = {}
+                    candidate_started = 0.0
+
+                if confirmed_letter is not None:
+                    display_letter = confirmed_letter
+                    display_conf = confirmed_conf
+                    display_scores = confirmed_scores
+                    display_status = "LOCKED"
+                elif candidate_letter is not None:
+                    hold_secs = max(0.0, CANDIDATE_HOLD_SECONDS - (now - candidate_started))
+                    display_letter = candidate_letter
+                    display_conf = candidate_conf
+                    display_scores = candidate_scores
+                    display_status = f"HOLD {hold_secs:.1f}s"
+                else:
+                    display_letter = None
+                    display_conf = 0.0
+                    display_scores = {}
+                    display_status = "SHOW A SIGN"
             else:
-                candidate_letter = None
-                candidate_conf = 0.0
-                candidate_scores = {}
-                candidate_started = 0.0
-
-            if candidate_letter is not None and now - candidate_started >= CANDIDATE_HOLD_SECONDS:
-                confirmed_letter = candidate_letter
-                confirmed_conf = candidate_conf
-                confirmed_scores = candidate_scores
-                cooldown_until = now + COOLDOWN_SECONDS
-                display_status = "CONFIRMED"
-                candidate_letter = None
-                candidate_started = 0.0
-
-            if confirmed_letter is not None:
+                # Keep the confirmed display static during cooldown
                 display_letter = confirmed_letter
                 display_conf = confirmed_conf
                 display_scores = confirmed_scores
                 display_status = "LOCKED"
-            elif candidate_letter is not None:
-                hold_secs = max(0.0, CANDIDATE_HOLD_SECONDS - (now - candidate_started))
-                display_letter = candidate_letter
-                display_conf = candidate_conf
-                display_scores = candidate_scores
-                display_status = f"HOLD {hold_secs:.1f}s"
-            else:
-                display_letter = None
-                display_conf = 0.0
-                display_scores = {}
-                display_status = "SHOW A SIGN"
-
-        elif in_cooldown:
-            # Keep the confirmed display static during cooldown
-            display_letter = confirmed_letter
-            display_conf = confirmed_conf
-            display_scores = confirmed_scores
-            display_status = "LOCKED"
         else:
             candidate_letter = None
             candidate_conf = 0.0
             candidate_scores = {}
             candidate_started = 0.0
-            if confirmed_letter is not None and now >= cooldown_until:
-                confirmed_letter = None
-                confirmed_conf = 0.0
-                confirmed_scores = {}
             if confirmed_letter is None:
                 display_letter = None
                 display_conf = 0.0
