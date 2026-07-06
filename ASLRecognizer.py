@@ -698,15 +698,160 @@ class ASLRecognizer:
         return min(1.0, score)
 
     # ═════════════════════════════════════════════════════════════════════════
-    # PHASE 4 — Complex / Nuanced (stubs)
+    # PHASE 4 — Complex / Nuanced
     # ═════════════════════════════════════════════════════════════════════════
-    def _check_K(self, f: ASLFeatures) -> float: return 0.0
-    def _check_R(self, f: ASLFeatures) -> float: return 0.0
-    def _check_X(self, f: ASLFeatures) -> float: return 0.0
-    def _check_G(self, f: ASLFeatures) -> float: return 0.0
-    def _check_H(self, f: ASLFeatures) -> float: return 0.0
-    def _check_P(self, f: ASLFeatures) -> float: return 0.0
-    def _check_Q(self, f: ASLFeatures) -> float: return 0.0
+
+    def _is_crossed(self, f: ASLFeatures) -> bool:
+        """Returns True if index and middle fingers are crossed (R)."""
+        lm = f.lmList
+        if f.is_right_hand:
+            return lm[8][1] > lm[12][1]
+        else:
+            return lm[8][1] < lm[12][1]
+
+    def _is_pointing_down(self, f: ASLFeatures, finger_idx: int) -> bool:
+        """True if the specified finger tip is below its MCP (pointing down).
+        finger_idx: 1=index, 2=middle"""
+        tip_ids = [4, 8, 12, 16, 20]
+        mcp_ids = [2, 5, 9, 13, 17]
+        # Y increases downwards, so tip.y > mcp.y means pointing down
+        return f.lmList[tip_ids[finger_idx]][2] > f.lmList[mcp_ids[finger_idx]][2]
+
+    def _check_K(self, f: ASLFeatures) -> float:
+        """K — Index & middle up, thumb touches side of middle finger PIP."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if not fu[1]: return 0.0
+        if not fu[2]: return 0.0
+        if any(fu[3:5]): return 0.0
+        
+        lm = f.lmList
+        # Thumb should NOT be wrapped horizontally (S or V might do this)
+        dx = abs(lm[4][1] - lm[3][1])
+        dy = abs(lm[4][2] - lm[3][2])
+        if dx > dy * 1.5:
+            return 0.0
+            
+        score = 0.50
+        score += sum((1.0 - fc[i]) for i in [1, 2]) / 2.0 * 0.20
+        score += sum(fc[i] for i in [3, 4]) / 2.0 * 0.15
+        
+        # In K, thumb tip rests near middle finger PIP.
+        mid_pip_y = lm[10][2]
+        thumb_tip_y = lm[4][2]
+        if abs(thumb_tip_y - mid_pip_y) < 30: # within 30 pixels Y
+            score += 0.15
+            
+        return min(1.0, score)
+
+    def _check_R(self, f: ASLFeatures) -> float:
+        """R — Index and middle crossed."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if not fu[1]: return 0.0
+        if not fu[2]: return 0.0
+        if any(fu[3:5]): return 0.0
+        
+        if not self._is_crossed(f):
+            return 0.0
+            
+        score = 0.65
+        score += sum((1.0 - fc[i]) for i in [1, 2]) / 2.0 * 0.20
+        score += sum(fc[i] for i in [3, 4]) / 2.0 * 0.15
+        return min(1.0, score)
+
+    def _check_X(self, f: ASLFeatures) -> float:
+        """X — Hooked index finger."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if any(fu[2:5]): return 0.0
+        
+        # Index should be hooked (intermediate curl)
+        if fc[1] < 0.25 or fc[1] > 0.85:
+            return 0.0
+            
+        score = 0.55
+        score += sum(fc[2:5]) / 3.0 * 0.25
+        
+        hook_quality = 1.0 - (abs(fc[1] - 0.55) / 0.30)
+        score += hook_quality * 0.20
+        return min(1.0, score)
+
+    def _check_G(self, f: ASLFeatures) -> float:
+        """G — Index pointing sideways, thumb pointing sideways, others curled."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if any(fu[2:5]): return 0.0
+        if fc[1] > 0.5: return 0.0 # must be straight
+        
+        lm = f.lmList
+        # Index finger pointing horizontally: dx > dy
+        idx_dx = abs(lm[8][1] - lm[5][1])
+        idx_dy = abs(lm[8][2] - lm[5][2])
+        if idx_dx < idx_dy: # pointing vertically
+            return 0.0
+            
+        score = 0.55
+        score += sum(fc[2:5]) / 3.0 * 0.25
+        
+        # Thumb also somewhat horizontal
+        t_dx = abs(lm[4][1] - lm[2][1])
+        t_dy = abs(lm[4][2] - lm[2][2])
+        if t_dx > t_dy:
+            score += 0.20
+            
+        return min(1.0, score)
+
+    def _check_H(self, f: ASLFeatures) -> float:
+        """H — Index and middle sideways, others curled, thumb tucked."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if any(fu[3:5]): return 0.0
+        if fc[1] > 0.5 or fc[2] > 0.5: return 0.0
+        
+        lm = f.lmList
+        idx_dx = abs(lm[8][1] - lm[5][1])
+        idx_dy = abs(lm[8][2] - lm[5][2])
+        mid_dx = abs(lm[12][1] - lm[9][1])
+        mid_dy = abs(lm[12][2] - lm[9][2])
+        
+        # Both must be sideways
+        if idx_dx < idx_dy or mid_dx < mid_dy:
+            return 0.0
+            
+        score = 0.60
+        score += sum(fc[3:5]) / 2.0 * 0.20
+        score += (1.0 - fc[1]) * 0.10 + (1.0 - fc[2]) * 0.10
+        return min(1.0, score)
+
+    def _check_P(self, f: ASLFeatures) -> float:
+        """P — K pointing down."""
+        fc = f.finger_curl
+        if not self._is_pointing_down(f, 1) or not self._is_pointing_down(f, 2):
+            return 0.0
+            
+        # Index and middle must be relatively straight (low curl)
+        if fc[1] > 0.5 or fc[2] > 0.5:
+            return 0.0
+            
+        if fc[3] < 0.5 or fc[4] < 0.5:
+            return 0.0
+            
+        score = 0.65
+        score += (fc[3] + fc[4]) / 2.0 * 0.35
+        return min(1.0, score)
+
+    def _check_Q(self, f: ASLFeatures) -> float:
+        """Q — G pointing down."""
+        fc = f.finger_curl
+        if not self._is_pointing_down(f, 1):
+            return 0.0
+            
+        # Index straight
+        if fc[1] > 0.5:
+            return 0.0
+            
+        if fc[2] < 0.5 or fc[3] < 0.5 or fc[4] < 0.5:
+            return 0.0
+            
+        score = 0.65
+        score += sum(fc[2:5]) / 3.0 * 0.35
+        return min(1.0, score)
 
     # ═════════════════════════════════════════════════════════════════════════
     # PHASE 5 — Digits (stubs)

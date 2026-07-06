@@ -304,7 +304,7 @@ def main() -> None:
 
     # ── Modules ──────────────────────────────────────────────────────────────
     detector   = handDetector(maxHands=1, detectionCon=0.85, trackCon=0.80)
-    recognizer = ASLRecognizer(active_phases=[1, 2, 3])
+    recognizer = ASLRecognizer(active_phases=[1, 2, 3, 4])
 
     # ── State ────────────────────────────────────────────────────────────────
     history       : List[Optional[str]] = []
@@ -322,7 +322,7 @@ def main() -> None:
     cv2.resizeWindow("ASL Sign Language Recognizer", 1280, 720)
 
     print("=" * 60)
-    print("  ASL Sign Language Recognizer  —  Phase 1-3")
+    print("  ASL Sign Language Recognizer  —  Phase 1-4")
     print(f"  Signs active: {' '.join(recognizer.active_letters)}")
     print("  D → debug  |  R → reset  |  Q → quit")
     print("=" * 60)
