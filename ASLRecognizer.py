@@ -3,18 +3,17 @@ ASLRecognizer.py
 ================
 Rule-based ASL hand-sign classifier built on top of ASLFeatureExtractor.
 
-Each letter or digit has a dedicated _check_X(f: ASLFeatures) → float method
+Each letter has a dedicated _check_X(f: ASLFeatures) → float method
 that returns a confidence score between 0.0 and 1.0.
 
 Letters are organised into phases from most-distinct (Phase 1) to most-nuanced
-(Phase 4), with digits in Phase 5.  Add a phase at runtime via `add_phase(n)`
-or by pressing N in the demo app.
+(Phase 4). Add a phase at runtime via `add_phase(n)` or by pressing N in the
+demo app.
 
-Phase 1 — Highly Distinct:  I  L  Y  B  5
-Phase 2 — One Extra Feature: 1  W  U  V  A  S  O
+Phase 1 — Highly Distinct:  I  L  Y  B
+Phase 2 — One Extra Feature: W  U  V  A  S  O
 Phase 3 — Two+ Features:     D  F  E  C  T  M  N
-Phase 4 — Complex / Nuanced: K  R  X  G  H  P  Q
-Phase 5 — Digits:            0  2  3  4  6  7  8  9
+Phase 4 — Complex / Nuanced: K  R  X  G  H  P  Q  J  Z
 
 Author  : ASL Recognizer Suite
 Version : 1.0  — Phase 1 implemented
@@ -39,11 +38,10 @@ class ASLRecognizer:
 
     # ── Phase map ─────────────────────────────────────────────────────────────
     PHASES: Dict[int, List[str]] = {
-        1: ['I', 'L', 'Y', 'B', '5'],
-        2: ['1', 'W', 'U', 'V', 'A', 'S', 'O'],
+        1: ['I', 'L', 'Y', 'B'],
+        2: ['W', 'U', 'V', 'A', 'S', 'O'],
         3: ['D', 'F', 'E', 'C', 'T', 'M', 'N'],
-        4: ['K', 'R', 'X', 'G', 'H', 'P', 'Q'],
-        5: ['0', '2', '3', '4', '6', '7', '8', '9'],
+        4: ['K', 'R', 'X', 'G', 'H', 'P', 'Q', 'J', 'Z'],
     }
 
     # Minimum confidence required to return a letter (avoids noise detections)
@@ -251,127 +249,36 @@ class ASLRecognizer:
         return min(1.0, score)
 
     def _check_B(self, f: ASLFeatures) -> float:
-        """
-        B — Four fingers extended vertically together; thumb tucked across palm.
-
-        Hard requirements:
-            • thumb  DOWN (tucked)
-            • index  UP
-            • middle UP
-            • ring   UP
-            • pinky  UP
-
-        Bonus:
-            • all four fingers well extended           (+0.20)
-            • thumb_across_palm is True                (+0.20)
-            • fingers are close together (low spread)  (+0.10)
-              This prevents future confusion with digit-4 (thumb to side, fingers spread)
-
-        Note: When digit-4 is added in Phase 5, B vs 4 disambiguates via
-        thumb_across_palm (B=True, 4=False) and finger spread.
-        """
+        """B — Four fingers extended vertically together; thumb tucked across palm."""
         fu, fc = f.fingers_up, f.finger_curl
 
-        # ── Hard checks ────────────────────────────────────────────────────
-        if     fu[0]:  return 0.0   # thumb  MUST be DOWN
-        if not fu[1]:  return 0.0   # index  MUST be up
-        if not fu[2]:  return 0.0   # middle MUST be up
-        if not fu[3]:  return 0.0   # ring   MUST be up
-        if not fu[4]:  return 0.0   # pinky  MUST be up
+        if fu[0]:
+            return 0.0
+        if not fu[1] or not fu[2] or not fu[3] or not fu[4]:
+            return 0.0
 
-        # ── Base ───────────────────────────────────────────────────────────
-        score = 0.45
-
-        # ── Penalty: if fingers are significantly curled, it's likely C, not B
+        score = 0.65
         avg_curl_4 = sum(fc[1:5]) / 4.0
         if avg_curl_4 > 0.25:
-            score -= 0.25
+            score -= 0.15
 
-        # ── Bonus: four fingers well extended ─────────────────────────────
         avg_ext = sum(1.0 - fc[i] for i in [1, 2, 3, 4]) / 4.0
         score += avg_ext * 0.20
 
-        # ── Bonus: thumb genuinely tucked ─────────────────────────────────
         if f.thumb_across_palm:
             score += 0.20
 
-        # ── Bonus: fingers held close together ────────────────────────────
         avg_spread = (f.index_middle_spread + f.middle_ring_spread + f.ring_pinky_spread) / 3.0
-        # threshold: spread < 0.07 (normalised) is "close"
         score += max(0.0, (0.07 - avg_spread)) / 0.07 * 0.15
 
-        return min(1.0, score)
-
-    def _check_5(self, f: ASLFeatures) -> float:
-        """
-        5 — All five fingers extended and spread apart ("open hand").
-
-        Hard requirements:
-            • ALL five fingers UP
-
-        Bonus:
-            • all fingers well extended     (+0.20)
-            • fingers visibly spread apart  (+0.40)
-              Uses the average lateral spread between adjacent fingertips,
-              normalised so spread ≥ 0.10 earns the full bonus.
-
-        Note: B has all four fingers UP but thumb DOWN, so fingers_up[0]
-        alone cleanly separates 5 from B.  The spread bonus further
-        separates 5 from future letters with all fingers up but held tightly.
-        """
-        fu, fc = f.fingers_up, f.finger_curl
-
-        # ── Hard check: every finger must be extended ──────────────────────
-        if not all(fu):
-            return 0.0
-
-        # ── Base ───────────────────────────────────────────────────────────
-        score = 0.35
-
-        # ── Bonus: genuinely extended fingers ─────────────────────────────
-        avg_ext = sum(1.0 - c for c in fc) / 5.0
-        score += avg_ext * 0.20
-
-        # ── Bonus: fingers spread apart ───────────────────────────────────
-        avg_spread = (f.index_middle_spread + f.middle_ring_spread + f.ring_pinky_spread) / 3.0
-        # Normalise: full bonus at avg_spread >= 0.10
-        spread_score = min(avg_spread / 0.10, 1.0)
-        score += spread_score * 0.40
-
-        # ── Soft penalty: if thumb is barely up, penalise  ─────────────────
-        # (prevents 5 from firing when only 4 fingers are truly extended)
-        if fc[0] > 0.5:            # thumb is more curled than extended
-            score -= 0.10
+        if avg_ext > 0.80 and f.thumb_across_palm:
+            score = max(score, 0.82)
 
         return min(1.0, max(0.0, score))
 
     # ═════════════════════════════════════════════════════════════════════════
     # PHASE 2 — One Extra Feature Required
     # ═════════════════════════════════════════════════════════════════════════
-
-    def _check_1(self, f: ASLFeatures) -> float:
-        """1 — Only index finger up, pointing up."""
-        fu, fc = f.fingers_up, f.finger_curl
-        if not fu[1]:  return 0.0
-        if     fu[2]:  return 0.0
-        if     fu[3]:  return 0.0
-        if     fu[4]:  return 0.0
-        if     fu[0]:  return 0.0  # thumb tucked
-
-        score = 0.50
-        score += (fc[2] + fc[3] + fc[4]) / 3.0 * 0.20
-        score += (1.0 - fc[1]) * 0.15
-        
-        # Pointing vertically
-        vert_score = max(0.0, (45.0 - f.index_dir_angle) / 45.0)
-        score += vert_score * 0.15
-        
-        # Penalty: if thumb touches middle/ring, it's a D, not a 1
-        min_thumb_dist = min(f.thumb_middle_dist, f.thumb_ring_dist)
-        if min_thumb_dist < 0.4:
-            score -= 0.25
-        
-        return min(1.0, max(0.0, score))
 
     def _check_W(self, f: ASLFeatures) -> float:
         """W — Index, middle, ring up. Pinky and thumb down."""
@@ -841,26 +748,56 @@ class ASLRecognizer:
         fc = f.finger_curl
         if not self._is_pointing_down(f, 1):
             return 0.0
-            
-        # Index straight
+
         if fc[1] > 0.5:
             return 0.0
-            
+
         if fc[2] < 0.5 or fc[3] < 0.5 or fc[4] < 0.5:
             return 0.0
-            
+
         score = 0.65
         score += sum(fc[2:5]) / 3.0 * 0.35
         return min(1.0, score)
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # PHASE 5 — Digits (stubs)
-    # ═════════════════════════════════════════════════════════════════════════
-    def _check_0(self, f: ASLFeatures) -> float: return 0.0
-    def _check_2(self, f: ASLFeatures) -> float: return 0.0
-    def _check_3(self, f: ASLFeatures) -> float: return 0.0
-    def _check_4(self, f: ASLFeatures) -> float: return 0.0
-    def _check_6(self, f: ASLFeatures) -> float: return 0.0
-    def _check_7(self, f: ASLFeatures) -> float: return 0.0
-    def _check_8(self, f: ASLFeatures) -> float: return 0.0
-    def _check_9(self, f: ASLFeatures) -> float: return 0.0
+    def _check_J(self, f: ASLFeatures) -> float:
+        """J — Index finger bent/hooked, thumb tucked, others curled."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if not fu[1]:
+            return 0.0
+        if any(fu[2:5]):
+            return 0.0
+        if fu[0]:
+            return 0.0
+
+        if fc[1] < 0.20 or fc[1] > 0.85:
+            return 0.0
+
+        score = 0.55
+        score += (sum(fc[2:5]) / 3.0) * 0.20
+        score += (1.0 - fc[0]) * 0.10
+        if f.index_dir_angle > 20.0:
+            score += 0.10
+        if f.index_middle_dist < 0.25:
+            score += 0.10
+        return min(1.0, score)
+
+    def _check_Z(self, f: ASLFeatures) -> float:
+        """Z — Index and middle extended closely together, thumb tucked."""
+        fu, fc = f.fingers_up, f.finger_curl
+        if not fu[1] or not fu[2]:
+            return 0.0
+        if any(fu[3:5]):
+            return 0.0
+        if fu[0]:
+            return 0.0
+        if f.index_middle_dist > 0.20:
+            return 0.0
+        if fc[1] > 0.90 or fc[2] > 0.90:
+            return 0.0
+
+        score = 0.60
+        score += sum((1.0 - fc[i]) for i in [1, 2]) / 2.0 * 0.20
+        score += sum(fc[i] for i in [0, 3, 4]) / 3.0 * 0.10
+        if f.index_dir_angle > 45.0:
+            score += 0.10
+        return min(1.0, score)
