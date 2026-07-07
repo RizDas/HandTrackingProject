@@ -43,6 +43,21 @@ except ImportError as e:
     sys.exit(1)
 
 
+def speak_letter(letter: Optional[str]) -> None:
+    """Speak the confirmed letter using the installed text-to-speech engine."""
+    if not letter:
+        return
+
+    try:
+        import pyttsx3
+        engine = pyttsx3.init()
+        engine.setProperty('rate', 170)
+        engine.say(letter)
+        engine.runAndWait()
+    except Exception as exc:
+        print(f"[SPEECH] Unable to speak '{letter}': {exc}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Colour Palette  (BGR)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -372,6 +387,7 @@ def main() -> None:
                     confirmed_scores = candidate_scores
                     cooldown_until = now + COOLDOWN_SECONDS
                     display_status = "CONFIRMED"
+                    speak_letter(confirmed_letter)
                     candidate_letter = None
                     candidate_conf = 0.0
                     candidate_scores = {}
